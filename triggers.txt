@@ -1,0 +1,377 @@
+<<<<<<< HEAD
+SHOW TRIGGERS;
+
+-- TRIGGERS -- 
+-- 1. TR_ActualizarDisponibilidadEquipos: Actualiza la disponibilidad de equipos técnicos tras asignaciones.
+DELIMITER //
+-- Se asigna un equipo: ponerlo como Ocupado
+CREATE TRIGGER TR_ActualizarDisponibilidadEquipos_Insert
+AFTER INSERT ON produccion_equipo
+FOR EACH ROW 
+BEGIN
+    UPDATE equipo_tecnico
+    SET Disponibilidad = 'Ocupado'
+    WHERE ID_equipo = NEW.ID_equipo;  
+
+END //
+
+DELIMITER ;
+
+-- Se retira la asignacion: ponerlo como Libre
+CREATE TRIGGER TR_ActualizarDisponibilidadEquipos_Delete
+AFTER DELETE ON produccion_equipo
+FOR EACH ROW 
+BEGIN
+    UPDATE equipo_tecnico
+    SET Disponibilidad = 'Libre'
+    WHERE ID_equipo = OLD.ID_equipo
+
+-- Ver disponiblidad actual del equipo 2 (Debería ser 'Libre')
+SELECT ID_equipo, Marca, Modelo, Disponibilidad
+FROM equipo_tecnico WHERE ID_equipo = 2;
+
+-- Asignarlo a una produccion
+INSERT INTO produccion_equipo VALUES (1, 2)
+
+-- Verificar: ahora debe decir 'Ocupado'
+SELECT ID_equipo, Marca, Modelo, Disponibilidad 
+FROM equipo_tecnico WHERE ID_equipo = 2;
+
+-- Quitar la asignacion
+DELETE FROM produccion_equipo
+WHERE ID_produccion = 1 AND ID_equipo = 2;
+
+-- Verificar: vuelve a decir 'Libre'
+SELECT ID_equipo, Marca, Modelo, Disponibilidad
+FROM equipo_tecnico
+WHERE ID_equipo = 2;
+
+
+-- 2. TR_VerificarPresupuestoProduccion: Verifica que los gastos no excedan el presupuesto.
+DELIMITER //
+
+CREATE TRIGGER TR_VerificarPresupuestoProduccion
+BEFORE UPDATE ON produccion
+FOR EACH ROW 
+BEGIN
+    IF NEW.Presupuesto_gastado > NEW.Presupuesto_inicial THEN
+       SIGNAL SQLSTATE '45000'
+       SET MESSAGE_TEXT = 'Error: El gasto supera el presupuesto inicial';
+    END IF;
+END //
+
+DELIMITER ;
+
+-- Ver presupuesto actual de la produccion 1
+SELECT ID_Produccion, Titulo, Presupuesto_inicial, Presupuesto_gastado
+FROM produccion WHERE ID_Produccion = 1;
+
+-- Gastar más de lo permitido (Debe fallar)
+UPDATE produccion SET Presupuesto_gastado = 999999 WHERE ID_produccion = 1;
+
+-- Un gasto válido (Debe funcionar)
+UPDATE produccion SET Presupuesto_gastado = 100000 WHERE ID_produccion = 1;
+
+
+-- 3. TR_RegistrarHistorialLocalizacion: Actualiza el historial de uso de una localización.
+CREATE TABLE Historial_localizacion (
+    ID_historial INT PRIMARY KEY AUTO_INCREMENT,
+    ID_localizacion INT,
+    ID_produccion INT,
+    Fecha_uso DATE,
+    Accion VARCHAR (50),
+    FOREIGN KEY (ID_localizacion) REFERENCES localizacion(ID_localizacion),
+    FOREIGN KEY (ID_produccion) REFERENCES produccion(ID_produccion)
+);
+
+DELIMITER //
+
+CREATE TRIGGER TR_RegistrarHistorialLocalizacion
+AFTER INSERT ON produccion_localizacion
+FOR EACH ROW 
+BEGIN 
+    INSERT INTO Historial_localizacion (ID_localizacion, ID_produccion, Fecha_uso, Accion)
+    VALUES (NEW.ID_localizacion, NEW.ID_produccion, CURDATE(), 'Asignada');
+END //
+
+DELIMITER ;
+
+-- Asignar una localizacion nueva
+INSERT INTO produccion_localizacion VALUES (1, 3);
+
+-- Verificar que se registró en el historial
+SELECT * FROM Historial_localizacion;
+
+
+-- 4. TR_ActualizarEstadoProduccion: Actualiza el estado de una producción según avance.
+DELIMITER //
+CREATE TRIGGER TR_ActualizarEstadoProduccion
+AFTER UPDATE ON postproduccion
+FOR EACH ROW 
+BEGIN
+    IF NEW.Porcentaje < 30 THEN
+       UPDATE produccion SET Estado = 'Iniciado'
+       WHERE ID_produccion = NEW.ID_produccion;
+    END IF;
+    
+    IF NEW.Porcentaje >= 30 AND NEW.Porcentaje < 70 THEN
+       UPDATE produccion SET Estado = 'En proceso'
+       WHERE ID_produccion = NEW.ID_produccion;
+    END IF;
+       
+    IF NEW.Porcentaje >= 70 THEN
+       UPDATE produccion SET Estado = 'Finalizado'
+       WHERE ID_produccion = NEW.ID_produccion;
+    END IF;
+END //
+
+DELIMITER ;
+
+-- Ver estado actual
+SELECT p.ID_produccion, p.Titulo, p.Estado, pp.Porcentaje
+FROM produccion p 
+JOIN postproduccion pp ON p.ID_produccion = pp.ID_produccion
+WHERE p.ID_produccion = 1;
+
+-- Menos de 30 = Iniciado
+UPDATE postproduccion SET Porcentaje = 20 WHERE ID_produccion = 1;
+SELECT p.ID_produccion, p.Titulo, p.Estado, pp.Porcentaje 
+FROM produccion p
+JOIN postproduccion pp ON p.ID_produccion = pp.ID_produccion
+WHERE p.ID_produccion = 1;
+
+-- Entre 30 y 69 = En proceso
+UPDATE postproduccion SET Porcentaje = 50 WHERE ID_produccion = 1;
+SELECT p.ID_produccion, p.Titulo, p.Estado, pp.Porcentaje
+FROM produccion p 
+JOIN postproduccion pp ON p.ID_produccion = pp.ID_produccion
+WHERE p.ID_produccion = 1;
+
+-- 70 o más = Finalizado
+UPDATE postproduccion SET Porcentaje = 85 WHERE ID_produccion = 1;
+SELECT p.ID_produccion, p.Titulo, p.Estado, pp.Porcentaje
+FROM produccion p
+JOIN postproduccion pp ON p.ID_produccion = pp.ID_produccion
+WHERE p.ID_produccion = 1;
+
+
+-- 5. TR_ControlarVersionesMaterial: Controla las versiones de material en postproducción.
+DELIMITER //
+
+CREATE TRIGGER TR_ControlaVersionesMaterial
+BEFORE INSERT ON versiones
+FOR EACH ROW 
+BEGIN
+    DECLARE total INT;
+    
+    SELECT COUNT(*) INTO total
+    FROM versiones
+    WHERE ID_post = NEW.ID_post AND Numero_version = NEW.Numero_version;
+	 
+    IF total > 0 THEN
+       SIGNAL SQLSTATE '45000'
+       SET MESSAGE_TEXT = 'Error: Esa versión ya existe para esta postprodución';
+    END IF;
+END // 
+
+DELIMITER ;
+
+-- Ver versiones existentes del post 1 (Ya tiene v1.0)
+SELECT * FROM versiones WHERE ID_post = 1;
+
+-- Intentar insertar una versión duplicada (Debe fallar)
+INSERT INTO versiones (ID_post, Numero_version, Fecha, Descripcion)
+VALUES (1, 'v1.0', '2025-03-01', 'Intento duplicado');
+
+-- Intenrar insertar una version nueva (Debe funcionar)
+INSERT INTO versiones (ID_post, Numero_version, Fecha, Descripcion)
+VALUES (1, 'v2.0', '2025-03-01', 'Nueva versión');
+=======
+SHOW TRIGGERS;
+
+-- TRIGGERS -- 
+-- 1. TR_ActualizarDisponibilidadEquipos: Actualiza la disponibilidad de equipos técnicos tras asignaciones.
+DELIMITER //
+-- Se asigna un equipo: ponerlo como Ocupado
+CREATE TRIGGER TR_ActualizarDisponibilidadEquipos_Insert
+AFTER INSERT ON produccion_equipo
+FOR EACH ROW 
+BEGIN
+    UPDATE equipo_tecnico
+    SET Disponibilidad = 'Ocupado'
+    WHERE ID_equipo = NEW.ID_equipo;  
+
+END //
+
+DELIMITER ;
+
+-- Se retira la asignacion: ponerlo como Libre
+CREATE TRIGGER TR_ActualizarDisponibilidadEquipos_Delete
+AFTER DELETE ON produccion_equipo
+FOR EACH ROW 
+BEGIN
+    UPDATE equipo_tecnico
+    SET Disponibilidad = 'Libre'
+    WHERE ID_equipo = OLD.ID_equipo
+
+-- Ver disponiblidad actual del equipo 2 (Debería ser 'Libre')
+SELECT ID_equipo, Marca, Modelo, Disponibilidad
+FROM equipo_tecnico WHERE ID_equipo = 2;
+
+-- Asignarlo a una produccion
+INSERT INTO produccion_equipo VALUES (1, 2)
+
+-- Verificar: ahora debe decir 'Ocupado'
+SELECT ID_equipo, Marca, Modelo, Disponibilidad 
+FROM equipo_tecnico WHERE ID_equipo = 2;
+
+-- Quitar la asignacion
+DELETE FROM produccion_equipo
+WHERE ID_produccion = 1 AND ID_equipo = 2;
+
+-- Verificar: vuelve a decir 'Libre'
+SELECT ID_equipo, Marca, Modelo, Disponibilidad
+FROM equipo_tecnico
+WHERE ID_equipo = 2;
+
+
+-- 2. TR_VerificarPresupuestoProduccion: Verifica que los gastos no excedan el presupuesto.
+DELIMITER //
+
+CREATE TRIGGER TR_VerificarPresupuestoProduccion
+BEFORE UPDATE ON produccion
+FOR EACH ROW 
+BEGIN
+    IF NEW.Presupuesto_gastado > NEW.Presupuesto_inicial THEN
+       SIGNAL SQLSTATE '45000'
+       SET MESSAGE_TEXT = 'Error: El gasto supera el presupuesto inicial';
+    END IF;
+END //
+
+DELIMITER ;
+
+-- Ver presupuesto actual de la produccion 1
+SELECT ID_Produccion, Titulo, Presupuesto_inicial, Presupuesto_gastado
+FROM produccion WHERE ID_Produccion = 1;
+
+-- Gastar más de lo permitido (Debe fallar)
+UPDATE produccion SET Presupuesto_gastado = 999999 WHERE ID_produccion = 1;
+
+-- Un gasto válido (Debe funcionar)
+UPDATE produccion SET Presupuesto_gastado = 100000 WHERE ID_produccion = 1;
+
+
+-- 3. TR_RegistrarHistorialLocalizacion: Actualiza el historial de uso de una localización.
+CREATE TABLE Historial_localizacion (
+    ID_historial INT PRIMARY KEY AUTO_INCREMENT,
+    ID_localizacion INT,
+    ID_produccion INT,
+    Fecha_uso DATE,
+    Accion VARCHAR (50),
+    FOREIGN KEY (ID_localizacion) REFERENCES localizacion(ID_localizacion),
+    FOREIGN KEY (ID_produccion) REFERENCES produccion(ID_produccion)
+);
+
+DELIMITER //
+
+CREATE TRIGGER TR_RegistrarHistorialLocalizacion
+AFTER INSERT ON produccion_localizacion
+FOR EACH ROW 
+BEGIN 
+    INSERT INTO Historial_localizacion (ID_localizacion, ID_produccion, Fecha_uso, Accion)
+    VALUES (NEW.ID_localizacion, NEW.ID_produccion, CURDATE(), 'Asignada');
+END //
+
+DELIMITER ;
+
+-- Asignar una localizacion nueva
+INSERT INTO produccion_localizacion VALUES (1, 3);
+
+-- Verificar que se registró en el historial
+SELECT * FROM Historial_localizacion;
+
+
+-- 4. TR_ActualizarEstadoProduccion: Actualiza el estado de una producción según avance.
+DELIMITER //
+CREATE TRIGGER TR_ActualizarEstadoProduccion
+AFTER UPDATE ON postproduccion
+FOR EACH ROW 
+BEGIN
+    IF NEW.Porcentaje < 30 THEN
+       UPDATE produccion SET Estado = 'Iniciado'
+       WHERE ID_produccion = NEW.ID_produccion;
+    END IF;
+    
+    IF NEW.Porcentaje >= 30 AND NEW.Porcentaje < 70 THEN
+       UPDATE produccion SET Estado = 'En proceso'
+       WHERE ID_produccion = NEW.ID_produccion;
+    END IF;
+       
+    IF NEW.Porcentaje >= 70 THEN
+       UPDATE produccion SET Estado = 'Finalizado'
+       WHERE ID_produccion = NEW.ID_produccion;
+    END IF;
+END //
+
+DELIMITER ;
+
+-- Ver estado actual
+SELECT p.ID_produccion, p.Titulo, p.Estado, pp.Porcentaje
+FROM produccion p 
+JOIN postproduccion pp ON p.ID_produccion = pp.ID_produccion
+WHERE p.ID_produccion = 1;
+
+-- Menos de 30 = Iniciado
+UPDATE postproduccion SET Porcentaje = 20 WHERE ID_produccion = 1;
+SELECT p.ID_produccion, p.Titulo, p.Estado, pp.Porcentaje 
+FROM produccion p
+JOIN postproduccion pp ON p.ID_produccion = pp.ID_produccion
+WHERE p.ID_produccion = 1;
+
+-- Entre 30 y 69 = En proceso
+UPDATE postproduccion SET Porcentaje = 50 WHERE ID_produccion = 1;
+SELECT p.ID_produccion, p.Titulo, p.Estado, pp.Porcentaje
+FROM produccion p 
+JOIN postproduccion pp ON p.ID_produccion = pp.ID_produccion
+WHERE p.ID_produccion = 1;
+
+-- 70 o más = Finalizado
+UPDATE postproduccion SET Porcentaje = 85 WHERE ID_produccion = 1;
+SELECT p.ID_produccion, p.Titulo, p.Estado, pp.Porcentaje
+FROM produccion p
+JOIN postproduccion pp ON p.ID_produccion = pp.ID_produccion
+WHERE p.ID_produccion = 1;
+
+
+-- 5. TR_ControlarVersionesMaterial: Controla las versiones de material en postproducción.
+DELIMITER //
+
+CREATE TRIGGER TR_ControlaVersionesMaterial
+BEFORE INSERT ON versiones
+FOR EACH ROW 
+BEGIN
+    DECLARE total INT;
+    
+    SELECT COUNT(*) INTO total
+    FROM versiones
+    WHERE ID_post = NEW.ID_post AND Numero_version = NEW.Numero_version;
+	 
+    IF total > 0 THEN
+       SIGNAL SQLSTATE '45000'
+       SET MESSAGE_TEXT = 'Error: Esa versión ya existe para esta postprodución';
+    END IF;
+END // 
+
+DELIMITER ;
+
+-- Ver versiones existentes del post 1 (Ya tiene v1.0)
+SELECT * FROM versiones WHERE ID_post = 1;
+
+-- Intentar insertar una versión duplicada (Debe fallar)
+INSERT INTO versiones (ID_post, Numero_version, Fecha, Descripcion)
+VALUES (1, 'v1.0', '2025-03-01', 'Intento duplicado');
+
+-- Intenrar insertar una version nueva (Debe funcionar)
+INSERT INTO versiones (ID_post, Numero_version, Fecha, Descripcion)
+VALUES (1, 'v2.0', '2025-03-01', 'Nueva versión');
+>>>>>>> 54f2d9287503d39bd37e8e4e4ee5ccb59ab0a843
